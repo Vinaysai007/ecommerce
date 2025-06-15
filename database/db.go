@@ -15,19 +15,17 @@ func InitDB(databaseURL string) {
 	if err != nil {
 		log.Fatal("Failed to connect the database, provide correct details")
 	}
-	defer DB.Close()
 
 	err = DB.Ping()
 	if err != nil {
 		log.Fatal("Database unreachable:", err)
 	}
 	log.Println("database connected successfully")
-	CreateTableUsers()
 }
 
 func CreateTableUsers() {
 	query := `
-	CREATE TABLE IF NOT users(
+	CREATE TABLE IF NOT EXISTS users(
 		id SERIAL PRIMARY KEY,
 		email VARCHAR(255) NOT NULL UNIQUE,
 		password_hash TEXT NOT NULL,

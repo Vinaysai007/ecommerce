@@ -19,6 +19,17 @@ func NewUserHandler(db *sql.DB) *UserHandler {
 	return &UserHandler{DB: db}
 }
 
+func (uh *UserHandler) UserExists(email string) (bool, error) {
+	query := `SELECT EXISTS(SELECT 1 FROM users WHERE LOWER(email)= LOWER($1))`
+	var exists bool
+	err := uh.DB.QueryRow(query, email).Scan(&exists)
+	if err != nil {
+		log.Printf("Error: query failed while checking existing user: %v", err)
+		return false, err
+	}
+	return exists, nil
+}
+
 func (uh *UserHandler) RegisterUser(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -29,7 +40,7 @@ func (uh *UserHandler) RegisterUser(w http.ResponseWriter, r *http.Request) {
 		Email     string `json:"email"`
 		Password  string `json:"password"`
 		FirstName string `json:"first_name"`
-		LastName  string `json:"second_name"`
+		LastName  string `json:"last_name"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&UserInput); err != nil {
@@ -39,6 +50,18 @@ func (uh *UserHandler) RegisterUser(w http.ResponseWriter, r *http.Request) {
 
 	if UserInput.Email == "" || UserInput.Password == "" {
 		http.Error(w, "Email and Password are required", http.StatusBadRequest)
+		return
+	}
+
+	exists, err := uh.UserExists(UserInput.Email)
+	if err != nil {
+		http.Error(w, "could not check for existing user", http.StatusInternalServerError)
+		return
+	}
+
+	if exists {
+		http.Error(w, "User with this email already exists", http.StatusConflict)
+		log.Printf("INFO: Registration attempt for existing email: %v", UserInput.Email)
 		return
 	}
 
@@ -59,7 +82,7 @@ func (uh *UserHandler) RegisterUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query :=
-		`INSERT INTO users(id,email,password_hash,first_name,last_name,created_at,updated_at)
+		`INSERT INTO users(email,password_hash,first_name,last_name,created_at,updated_at)
 		VALUES($1,$2,$3,$4,$5,$6) 
 		RETURNING id;`
 
@@ -81,4 +104,44 @@ func (uh *UserHandler) RegisterUser(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(user)
 	log.Printf("user registered successfully")
+}
+
+func (uh *UserHandler) LoginUser(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+
+	var credentials struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	err := json.NewDecoder(r.Body).Decode(&credentials)
+	if err != nil {
+		http.Error(w, "Failed to decode the user values while logging", http.StatusInternalServerError)
+		return
+	}
+
+	var userHashedPassword string
+	query := `SELECT password FROM users WHERE email=$1`
+	err = uh.DB.QueryRow(query, credentials.Email).Scan(&userHashedPassword)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+			log.Printf("INFO: Login attempt failed for non-existent email: %v", credentials.Email)
+			return
+		}
+
+		http.Error(w, "login failed", http.StatusInternalServerError)
+		log.Printf("ERROR: Database query failed during login for email %s: %v", credentials.Email, err)
+		return
+	}
+
+	err = utils.ComparePassHash(userHashedPassword, credentials.Password)
+	if err != nil {
+		http.Error(w, "Invalid credientials", http.StatusUnauthorized)
+		log.Printf("INFO: login attempt failed for email: %s: incorrect password", credentials.Email)
+		return
+	}
+
 }
